@@ -1,23 +1,31 @@
 <?php
+// File Signature: sell.php
 session_start();
 require 'config.php';
 
-if (!isset($_SESSION['user_id'])) {
-    error_log("sell.php: No user_id, redirecting to index.php");
+// Restrict access
+if (!isset($_SESSION['user_id']) || !in_array($_SESSION['role'], ['admin', 'manager', 'cashier'])) {
+    error_log("sell.php: Unauthorized access attempt by user ID " . ($_SESSION['user_id'] ?? 'unknown'));
     header('Location: index.php');
-    exit;
+    exit('Unauthorized access.');
 }
 
+// Verify file identity
+if (basename(__FILE__) !== 'sell.php') {
+    error_log("sell.php: File mismatch detected at " . __FILE__);
+    exit('Error: File mismatch detected.');
+}
+
+// Fetch products with stock
+$products = [];
 try {
-    $stmt = $pdo->query("SELECT id, name, selling_price, stock FROM products WHERE stock > 0");
+    $stmt = $pdo->prepare("SELECT id, name, selling_price, stock FROM products WHERE stock > 0");
+    $stmt->execute();
     $products = $stmt->fetchAll(PDO::FETCH_ASSOC);
-    error_log("sell.php: Fetched " . count($products) . " products");
-    if (empty($products)) {
-        $_SESSION['warning'] = "No products with stock available. Add products in Manage Inventory.";
-    }
+    error_log("sell.php: Fetched " . count($products) . " products at " . date('Y-m-d H:i:s'));
 } catch (PDOException $e) {
-    error_log("sell.php: Query error - " . $e->getMessage());
-    $_SESSION['error'] = "Failed to fetch products. Check database.";
+    error_log("sell.php: Query error - " . $e->getMessage() . " at " . date('Y-m-d H:i:s'));
+    $_SESSION['error'] = "Failed to fetch products: Database error.";
     $products = [];
 }
 ?>
@@ -76,7 +84,7 @@ try {
             max-width: 150px;
             text-align: right;
         }
-        #product-table .col-total {
+        #product-table .	col-total {
             min-width: 120px;
             max-width: 150px;
             text-align: right;
@@ -160,6 +168,16 @@ try {
         .receipt-btn:hover {
             background-color: #d48f1e;
         }
+        .no-products {
+            text-align: center;
+            padding: 20px;
+            border: 2px solid #f5a623;
+            border-radius: 5px;
+            background-color: #fff;
+            color: #333;
+            font-size: 18px;
+            margin-top: 20px;
+        }
         @media print {
             body * {
                 visibility: hidden;
@@ -194,47 +212,43 @@ try {
             <?php if (isset($_SESSION['success'])): ?>
                 <p class="success"><?php echo htmlspecialchars($_SESSION['success']); unset($_SESSION['success']); ?></p>
             <?php endif; ?>
-            <form method="POST" action="process_sale.php" id="sale-form" onsubmit="return validateForm()">
-                <div class="search-container">
-                    <select id="product-search" class="search-input" onchange="handleProductSelect(this)">
-                        <option value="" disabled selected>Select a product</option>
-                        <?php foreach ($products as $product): ?>
-                            <option value="<?php echo htmlspecialchars($product['name']); ?>"
-                                    data-id="<?php echo $product['id']; ?>"
-                                    data-price="<?php echo $product['selling_price']; ?>"
-                                    data-stock="<?php echo $product['stock']; ?>">
-                                <?php echo htmlspecialchars($product['name']); ?> (in stock: <?php echo $product['stock']; ?>pcs, Sell price: Ksh <?php echo number_format($product['selling_price'], 2); ?>)
-                            </option>
-                        <?php endforeach; ?>
-                        <?php if (empty($products)): ?>
-                            <option value="Test Product"
-                                    data-id="0"
-                                    data-price="100.00"
-                                    data-stock="10">
-                                Test Product (in stock: 10pcs, Sell price: Ksh 100.00)
-                            </option>
-                        <?php endif; ?>
-                    </select>
-                </div>
-                <div class="table-wrapper">
-                    <table id="product-table">
-                        <thead>
-                            <tr>
-                                <th class="col-product" data-column="product">Product</th>
-                                <th class="col-quantity" data-column="quantity">Quantity</th>
-                                <th class="col-price" data-column="price">Price (Ksh)</th>
-                                <th class="col-total" data-column="total">Total (Ksh)</th>
-                                <th class="col-action" data-column="action">Action</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            <!-- Rows added dynamically -->
-                        </tbody>
-                    </table>
-                </div>
-                <button type="button" class="orange-btn add-product-btn" onclick="addProductRow()">Add Product</button>
-                <button type="submit" class="orange-btn">Complete Sale</button>
-            </form>
+            <?php if (empty($products)): ?>
+                <div class="no-products">No products available. Add products in Manage Inventory.</div>
+            <?php else: ?>
+                <form method="POST" action="process_sale.php" id="sale-form" onsubmit="return validateForm()">
+                    <div class="search-container">
+                        <select id="product-search" class="search-input" onchange="handleProductSelect(this)">
+                            <option value="" disabled selected>Select a product</option>
+                            <?php foreach ($products as $product): ?>
+                                <option value="<?php echo htmlspecialchars($product['name']); ?>"
+                                        data-id="<?php echo $product['id']; ?>"
+                                        data-price="<?php echo $product['selling_price']; ?>"
+                                        data-stock="<?php echo $product['stock']; ?>">
+                                    <?php echo htmlspecialchars($product['name']); ?> (in stock: <?php echo $product['stock']; ?>pcs, Sell price: Ksh <?php echo number_format($product['selling_price'], 2); ?>)
+                                </option>
+                            <?php endforeach; ?>
+                        </select>
+                    </div>
+                    <div class="table-wrapper">
+                        <table id="product-table">
+                            <thead>
+                                <tr>
+                                    <th class="col-product" data-column="product">Product</th>
+                                    <th class="col-quantity" data-column="quantity">Quantity</th>
+                                    <th class="col-price" data-column="price">Price (Ksh)</th>
+                                    <th class="col-total" data-column="total">Total (Ksh)</th>
+                                    <th class="col-action" data-column="action">Action</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <!-- Rows added dynamically -->
+                            </tbody>
+                        </table>
+                    </div>
+                    <button type="button" class="orange-btn add-product-btn" onclick="addProductRow()">Add Product</button>
+                    <button type="submit" class="orange-btn">Complete Sale</button>
+                </form>
+            <?php endif; ?>
             <?php if (isset($_SESSION['receipt_data'])): ?>
                 <button class="orange-btn receipt-btn" onclick="showReceipt()">View Receipt</button>
                 <div class="receipt-modal" id="receipt-modal">
@@ -312,8 +326,8 @@ try {
                 const product = {
                     id: option.getAttribute('data-id'),
                     name: select.value,
-                    price: option.getAttribute('data-price'),
-                    stock: option.getAttribute('data-stock')
+                    price: parseFloat(option.getAttribute('data-price')),
+                    stock: parseInt(option.getAttribute('data-stock'))
                 };
                 console.log('Selected:', product);
                 const tbody = document.querySelector('#product-table tbody');
@@ -333,7 +347,7 @@ try {
                     firstRow.querySelector('input[name="products[]"]').value = product.name;
                     firstRow.querySelector('input[name="product_ids[]"]').value = product.id;
                     firstRow.querySelector('input[name="quantities[]"]').value = 1;
-                    firstRow.querySelector('input[name="prices[]"]').value = product.price;
+                    firstRow.querySelector('input[name="prices[]"]').value = product.price.toFixed(2);
                     firstRow.querySelector('.total-display').textContent = (1 * product.price).toFixed(2);
                     firstRow.querySelector('td[data-column="product"]').setAttribute('data-column', 'product');
                     firstRow.querySelector('td[data-column="quantity"]').setAttribute('data-column', 'quantity');
@@ -381,8 +395,8 @@ try {
                     const product = {
                         id: option.getAttribute('data-id'),
                         name: value,
-                        price: option.getAttribute('data-price'),
-                        stock: option.getAttribute('data-stock')
+                        price: parseFloat(option.getAttribute('data-price')),
+                        stock: parseInt(option.getAttribute('data-stock'))
                     };
                     console.log('Input selected:', product);
                     const tbody = document.querySelector('#product-table tbody');
@@ -399,7 +413,7 @@ try {
                     }
                     row.querySelector('input[name="product_ids[]"]').value = product.id;
                     row.querySelector('input[name="quantities[]"]').value = 1;
-                    row.querySelector('input[name="prices[]"]').value = product.price;
+                    row.querySelector('input[name="prices[]"]').value = product.price.toFixed(2);
                     row.querySelector('.total-display').textContent = (1 * product.price).toFixed(2);
                 } else {
                     alert('Please select a valid product from the list.');
@@ -496,12 +510,6 @@ try {
                     data-price="<?php echo $product['selling_price']; ?>"
                     data-stock="<?php echo $product['stock']; ?>">
         <?php endforeach; ?>
-        <?php if (empty($products)): ?>
-            <option value="Test Product"
-                    data-id="0"
-                    data-price="100.00"
-                    data-stock="10">
-        <?php endif; ?>
     </datalist>
 </body>
 </html>
