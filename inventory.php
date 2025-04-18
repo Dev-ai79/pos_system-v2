@@ -4,6 +4,11 @@ require 'config.php';
 
 // Restrict to admin/manager
 if (!isset($_SESSION['user_id']) || !in_array($_SESSION['role'], ['admin', 'manager'])) {
+    if (isset($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQUESTED_WITH']) === 'xmlhttprequest') {
+        header('Content-Type: application/json');
+        echo json_encode(['success' => false, 'message' => 'Unauthorized access.']);
+        exit;
+    }
     header('Location: index.php');
     exit;
 }
@@ -13,11 +18,23 @@ if (empty($_SESSION['csrf_token'])) {
     $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
 }
 
+// Handle AJAX requests
+$isAjax = isset($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQUESTED_WITH']) === 'xmlhttprequest';
+if ($isAjax) {
+    header('Content-Type: application/json');
+    $response = ['success' => false, 'message' => 'Invalid request.'];
+}
+
 // Handle product addition
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_product'])) {
     if (!isset($_POST['csrf_token']) || $_POST['csrf_token'] !== $_SESSION['csrf_token']) {
         error_log("Add Product CSRF Failure: " . print_r($_POST, true));
-        $_SESSION['error'] = "Invalid request.";
+        $error = "Invalid request.";
+        if ($isAjax) {
+            echo json_encode(['success' => false, 'message' => $error]);
+            exit;
+        }
+        $_SESSION['error'] = $error;
     } else {
         $name = trim($_POST['name']);
         $buying_price = floatval($_POST['buying_price']);
@@ -25,35 +42,67 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_product'])) {
         $stock = intval($_POST['stock']);
         
         if (empty($name) || $selling_price <= 0 || $buying_price < 0 || $stock < 0) {
-            $_SESSION['error'] = "Please fill in all fields correctly.";
+            $error = "Please fill in all fields correctly.";
+            if ($isAjax) {
+                echo json_encode(['success' => false, 'message' => $error]);
+                exit;
+            }
+            $_SESSION['error'] = $error;
         } else {
             try {
                 $stmt = $pdo->prepare("INSERT INTO products (name, selling_price, buying_price, stock) VALUES (?, ?, ?, ?)");
                 $stmt->execute([$name, $selling_price, $buying_price, $stock]);
-                $_SESSION['success'] = "Product added successfully.";
+                $success = "Product added successfully.";
+                if ($isAjax) {
+                    echo json_encode(['success' => true, 'message' => $success]);
+                    exit;
+                }
+                $_SESSION['success'] = $success;
             } catch (PDOException $e) {
                 error_log("Add Product Error: " . $e->getMessage());
-                $_SESSION['error'] = "Error adding product: " . htmlspecialchars($e->getMessage());
+                $error = "Error adding product: " . htmlspecialchars($e->getMessage());
+                if ($isAjax) {
+                    echo json_encode(['success' => false, 'message' => $error]);
+                    exit;
+                }
+                $_SESSION['error'] = $error;
             }
         }
     }
-    header('Location: inventory.php');
-    exit;
+    if (!$isAjax) {
+        header('Location: inventory.php');
+        exit;
+    }
 }
 
 // Handle stock update
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['update_stock'])) {
     if (!isset($_POST['csrf_token']) || $_POST['csrf_token'] !== $_SESSION['csrf_token']) {
         error_log("Stock Update CSRF Failure: " . print_r($_POST, true));
-        $_SESSION['error'] = "Invalid request.";
+        $error = "Invalid request.";
+        if ($isAjax) {
+            echo json_encode(['success' => false, 'message' => $error]);
+            exit;
+        }
+        $_SESSION['error'] = $error;
     } else {
         $product_id = intval($_POST['product_id']);
         $stock_change = isset($_POST['stock_change']) ? trim($_POST['stock_change']) : '';
         
         if ($stock_change === '' || !is_numeric($stock_change)) {
-            $_SESSION['error'] = "Please enter a valid stock change amount.";
+            $error = "Please enter a valid stock change amount.";
+            if ($isAjax) {
+                echo json_encode(['success' => false, 'message' => $error]);
+                exit;
+            }
+            $_SESSION['error'] = $error;
         } elseif (intval($stock_change) == 0) {
-            $_SESSION['error'] = "Stock change cannot be zero.";
+            $error = "Stock change cannot be zero.";
+            if ($isAjax) {
+                echo json_encode(['success' => false, 'message' => $error]);
+                exit;
+            }
+            $_SESSION['error'] = $error;
         } else {
             $stock_change = intval($stock_change);
             try {
@@ -62,26 +111,56 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['update_stock'])) {
                 $current_stock = $stmt->fetchColumn();
                 
                 if ($current_stock === false) {
-                    $_SESSION['error'] = "Product not found.";
+                    $error = "Product not found.";
+                    if ($isAjax) {
+                        echo json_encode(['success' => false, 'message' => $error]);
+                        exit;
+                    }
+                    $_SESSION['error'] = $error;
                 } elseif ($current_stock + $stock_change < 0) {
-                    $_SESSION['error'] = "Cannot adjust stock: would result in negative stock.";
+                    $error = "Cannot adjust stock: would result in negative stock.";
+                    if ($isAjax) {
+                        echo json_encode(['success' => false, 'message' => $error]);
+                        exit;
+                    }
+                    $_SESSION['error'] = $error;
                 } else {
                     $stmt = $pdo->prepare("UPDATE products SET stock = stock + ? WHERE id = ?");
                     $stmt->execute([$stock_change, $product_id]);
                     if ($stmt->rowCount() > 0) {
-                        $_SESSION['success'] = "Stock updated successfully by " . ($stock_change > 0 ? "+" : "") . $stock_change . ".";
+                        $success = "Stock updated successfully by " . ($stock_change > 0 ? "+" : "") . $stock_change . ".";
+                        if ($isAjax) {
+                            $stmt = $pdo->prepare("SELECT stock FROM products WHERE id = ?");
+                            $stmt->execute([$product_id]);
+                            $new_stock = $stmt->fetchColumn();
+                            echo json_encode(['success' => true, 'message' => $success, 'new_stock' => $new_stock]);
+                            exit;
+                        }
+                        $_SESSION['success'] = $success;
                     } else {
-                        $_SESSION['error'] = "No stock changes were made.";
+                        $error = "No stock changes were made.";
+                        if ($isAjax) {
+                            echo json_encode(['success' => false, 'message' => $error]);
+                            exit;
+                        }
+                        $_SESSION['error'] = $error;
                     }
                 }
             } catch (PDOException $e) {
                 error_log("Stock Update Error: " . $e->getMessage());
-                $_SESSION['error'] = "Error updating stock: " . htmlspecialchars($e.getMessage());
+                $error = "Error updating stock: " . htmlspecialchars($e->getMessage());
+                if ($isAjax) {
+                    echo json_encode(['success' => false, 'message' => $error]);
+                    exit;
+                }
+                $_SESSION['error'] = $error;
             }
         }
     }
-    header('Location: inventory.php');
-    exit;
+    if (!$isAjax) {
+        header('Location: inventory.php');
+        exit;
+    }
 }
 
 // Handle product edit
@@ -89,7 +168,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_product'])) {
     error_log("Save Product: " . print_r($_POST, true));
     if (!isset($_POST['csrf_token']) || $_POST['csrf_token'] !== $_SESSION['csrf_token']) {
         error_log("Save Product CSRF Failure: " . print_r($_POST, true));
-        $_SESSION['error'] = "Invalid CSRF token.";
+        $error = "Invalid CSRF token.";
+        if ($isAjax) {
+            echo json_encode(['success' => false, 'message' => $error]);
+            exit;
+        }
+        $_SESSION['error'] = $error;
     } else {
         $product_id = intval($_POST['product_id']);
         $name = trim($_POST['name']);
@@ -98,30 +182,66 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_product'])) {
         $stock = intval($_POST['stock']);
         
         if (empty($name) || $selling_price <= 0 || $buying_price < 0 || $stock < 0) {
-            $_SESSION['error'] = "Please fill in all fields correctly.";
+            $error = "Please fill in all fields correctly.";
+            if ($isAjax) {
+                echo json_encode(['success' => false, 'message' => $error]);
+                exit;
+            }
+            $_SESSION['error'] = $error;
         } else {
             try {
                 $stmt = $pdo->prepare("SELECT id FROM products WHERE id = ?");
                 $stmt->execute([$product_id]);
                 if (!$stmt->fetch()) {
-                    $_SESSION['error'] = "Product not found.";
+                    $error = "Product not found.";
+                    if ($isAjax) {
+                        echo json_encode(['success' => false, 'message' => $error]);
+                        exit;
+                    }
+                    $_SESSION['error'] = $error;
                 } else {
                     $stmt = $pdo->prepare("UPDATE products SET name = ?, selling_price = ?, buying_price = ?, stock = ? WHERE id = ?");
                     $stmt->execute([$name, $selling_price, $buying_price, $stock, $product_id]);
                     if ($stmt->rowCount() > 0) {
-                        $_SESSION['success'] = "Product updated successfully.";
+                        $success = "Product updated successfully.";
+                        if ($isAjax) {
+                            echo json_encode([
+                                'success' => true,
+                                'message' => $success,
+                                'product' => [
+                                    'name' => $name,
+                                    'buying_price' => $buying_price,
+                                    'selling_price' => $selling_price,
+                                    'stock' => $stock
+                                ]
+                            ]);
+                            exit;
+                        }
+                        $_SESSION['success'] = $success;
                     } else {
-                        $_SESSION['error'] = "No changes were made to the product.";
+                        $error = "No changes were made to the product.";
+                        if ($isAjax) {
+                            echo json_encode(['success' => false, 'message' => $error]);
+                            exit;
+                        }
+                        $_SESSION['error'] = $error;
                     }
                 }
             } catch (PDOException $e) {
                 error_log("Save Product Error: " . $e->getMessage());
-                $_SESSION['error'] = "Error updating product: " . htmlspecialchars($e->getMessage());
+                $error = "Error updating product: " . htmlspecialchars($e->getMessage());
+                if ($isAjax) {
+                    echo json_encode(['success' => false, 'message' => $error]);
+                    exit;
+                }
+                $_SESSION['error'] = $error;
             }
         }
     }
-    header('Location: inventory.php');
-    exit;
+    if (!$isAjax) {
+        header('Location: inventory.php');
+        exit;
+    }
 }
 
 // Handle product deletion
@@ -129,33 +249,60 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['delete_product'])) {
     error_log("Delete Product: " . print_r($_POST, true));
     if (!isset($_POST['csrf_token']) || $_POST['csrf_token'] !== $_SESSION['csrf_token']) {
         error_log("Delete Product CSRF Failure: " . print_r($_POST, true));
-        $_SESSION['error'] = "Invalid request.";
+        $error = "Invalid request.";
+        if ($isAjax) {
+            echo json_encode(['success' => false, 'message' => $error]);
+            exit;
+        }
+        $_SESSION['error'] = $error;
     } else {
         $product_id = intval($_POST['product_id']);
         try {
             $stmt = $pdo->prepare("SELECT id FROM products WHERE id = ?");
             $stmt->execute([$product_id]);
             if (!$stmt->fetch()) {
-                $_SESSION['error'] = "Product not found.";
+                $error = "Product not found.";
+                if ($isAjax) {
+                    echo json_encode(['success' => false, 'message' => $error]);
+                    exit;
+                }
+                $_SESSION['error'] = $error;
             } else {
                 $stmt = $pdo->prepare("DELETE FROM products WHERE id = ?");
                 $stmt->execute([$product_id]);
                 if ($stmt->rowCount() > 0) {
-                    $_SESSION['success'] = "Product deleted successfully.";
+                    $success = "Product deleted successfully.";
+                    if ($isAjax) {
+                        echo json_encode(['success' => true, 'message' => $success]);
+                        exit;
+                    }
+                    $_SESSION['success'] = $success;
                 } else {
-                    $_SESSION['error'] = "No product was deleted.";
+                    $error = "No product was deleted.";
+                    if ($isAjax) {
+                        echo json_encode(['success' => false, 'message' => $error]);
+                        exit;
+                    }
+                    $_SESSION['error'] = $error;
                 }
             }
         } catch (PDOException $e) {
             error_log("Delete Product Error: " . $e->getMessage());
-            $_SESSION['error'] = "Error deleting product: " . htmlspecialchars($e->getMessage());
+            $error = "Error deleting product: " . htmlspecialchars($e->getMessage());
+            if ($isAjax) {
+                echo json_encode(['success' => false, 'message' => $error]);
+                exit;
+            }
+            $_SESSION['error'] = $error;
         }
     }
-    header('Location: inventory.php');
-    exit;
+    if (!$isAjax) {
+        header('Location: inventory.php');
+        exit;
+    }
 }
 
-// Fetch products
+// Fetch products (for non-AJAX requests)
 $search = isset($_GET['search']) ? trim($_GET['search']) : '';
 $where = $search ? "WHERE name LIKE ?" : "";
 $query = "SELECT * FROM products $where ORDER BY name";
@@ -175,6 +322,19 @@ $products = $stmt->fetchAll(PDO::FETCH_ASSOC);
     <link rel="stylesheet" href="styles.css?v=<?php echo filemtime('styles.css'); ?>">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/5.15.4/css/all.min.css">
     <style>
+        #messages {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            z-index: 1000;
+            max-width: 300px;
+        }
+        #messages .success, #messages .error {
+            padding: 10px;
+            margin-bottom: 10px;
+            border-radius: 4px;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.2);
+        }
         .table-responsive {
             max-width: 100%;
             overflow-x: auto;
@@ -194,7 +354,8 @@ $products = $stmt->fetchAll(PDO::FETCH_ASSOC);
             border-bottom: 1px solid #ddd;
         }
         .table th {
-            background-color: #f8f8f8;
+            background-color: #2c3e50;
+            color: #ffffff;
             font-weight: bold;
             position: sticky;
             top: 0;
@@ -300,6 +461,11 @@ $products = $stmt->fetchAll(PDO::FETCH_ASSOC);
                 padding: 5px 10px;
                 font-size: 12px;
             }
+            #messages {
+                top: 10px;
+                right: 10px;
+                max-width: 80%;
+            }
         }
     </style>
 </head>
@@ -309,6 +475,7 @@ $products = $stmt->fetchAll(PDO::FETCH_ASSOC);
         <?php include 'includes/sidebar.php'; ?>
         <div class="main-content">
             <h1>Manage Inventory</h1>
+            <div id="messages"></div>
             <?php if (isset($_SESSION['error'])): ?>
                 <p class="error"><?php echo htmlspecialchars($_SESSION['error']); unset($_SESSION['error']); ?></p>
             <?php endif; ?>
@@ -364,7 +531,7 @@ $products = $stmt->fetchAll(PDO::FETCH_ASSOC);
                                         <input type="number" name="stock" value="<?php echo $product['stock']; ?>" min="0" readonly required data-input="stock">
                                     </td>
                                     <td>
-                                        <form method="POST" class="edit-product-form" action="inventory.php" id="edit-form-<?php echo $product['id']; ?>">
+                                        <form method="POST" class="edit-product-form" id="edit-form-<?php echo $product['id']; ?>">
                                             <input type="hidden" name="csrf_token" value="<?php echo $_SESSION['csrf_token']; ?>">
                                             <input type="hidden" name="product_id" value="<?php echo $product['id']; ?>">
                                             <input type="hidden" name="name" class="form-name">
@@ -378,12 +545,12 @@ $products = $stmt->fetchAll(PDO::FETCH_ASSOC);
                                         </form>
                                     </td>
                                     <td>
-                                        <form method="POST" class="delete-form" action="inventory.php" id="delete-form-<?php echo $product['id']; ?>">
+                                        <form method="POST" class="delete-form" id="delete-form-<?php echo $product['id']; ?>">
                                             <input type="hidden" name="csrf_token" value="<?php echo $_SESSION['csrf_token']; ?>">
                                             <input type="hidden" name="product_id" value="<?php echo $product['id']; ?>">
                                             <button type="submit" name="delete_product" class="delete-btn">Delete</button>
                                         </form>
-                                        <form method="POST" class="add-stock-form-inline" action="inventory.php" id="stock-form-<?php echo $product['id']; ?>">
+                                        <form method="POST" class="add-stock-form-inline" id="stock-form-<?php echo $product['id']; ?>">
                                             <input type="hidden" name="csrf_token" value="<?php echo $_SESSION['csrf_token']; ?>">
                                             <input type="hidden" name="product_id" value="<?php echo $product['id']; ?>">
                                             <input type="number" name="stock_change" class="stock-input" placeholder="+/- Stock" required>
@@ -402,6 +569,89 @@ $products = $stmt->fetchAll(PDO::FETCH_ASSOC);
         document.addEventListener('DOMContentLoaded', function() {
             console.log('DOM loaded, initializing edit buttons');
             
+            // Display messages
+            function showMessage(message, type) {
+                console.log('Showing message:', { message, type });
+                const messageDiv = document.getElementById('messages');
+                const messageP = document.createElement('p');
+                messageP.className = type;
+                messageP.textContent = message;
+                messageDiv.appendChild(messageP);
+                setTimeout(() => {
+                    messageP.remove();
+                }, 5000);
+            }
+            
+            // Handle form submissions via AJAX
+            function handleFormSubmit(form, action) {
+                const formData = new FormData(form);
+                formData.append(action, '1'); // Ensure action is included
+                console.log(`Submitting ${action} for form:`, form);
+                
+                fetch('inventory.php', {
+                    method: 'POST',
+                    body: formData,
+                    headers: {
+                        'X-Requested-With': 'XMLHttpRequest'
+                    }
+                })
+                .then(response => response.json())
+                .then(data => {
+                    console.log(`${action} response:`, data);
+                    showMessage(data.message, data.success ? 'success' : 'error');
+                    
+                    if (data.success) {
+                        const row = form.closest('tr');
+                        if (action === 'save_product' && data.product) {
+                            // Update table inputs
+                            row.querySelector('input[name="name"]').value = data.product.name;
+                            row.querySelector('input[name="buying_price"]').value = data.product.buying_price;
+                            row.querySelector('input[name="selling_price"]').value = data.product.selling_price;
+                            row.querySelector('input[name="stock"]').value = data.product.stock;
+                            // Reset edit state
+                            row.querySelectorAll('input[data-input]').forEach(input => {
+                                input.setAttribute('readonly', 'readonly');
+                                input.style.cursor = 'not-allowed';
+                            });
+                            form.querySelector('.save-btn').style.display = 'none';
+                            form.querySelector('.edit-btn').style.display = 'inline-block';
+                        } else if (action === 'update_stock' && data.new_stock !== undefined) {
+                            // Update stock input
+                            row.querySelector('input[name="stock"]').value = data.new_stock;
+                            // Clear stock input
+                            form.querySelector('.stock-input').value = '';
+                        } else if (action === 'delete_product') {
+                            // Remove row
+                            row.remove();
+                            // Check if table is empty
+                            if (!document.querySelector('tbody tr')) {
+                                const tableContainer = document.querySelector('.table-responsive');
+                                tableContainer.innerHTML = '<p>No products found. Please add products using the form above.</p>';
+                            }
+                        }
+                    }
+                })
+                .catch(error => {
+                    console.error(`${action} error:`, error);
+                    showMessage('An error occurred. Please try again.', 'error');
+                });
+            }
+            
+            // Intercept form submissions
+            document.addEventListener('submit', function(e) {
+                const form = e.target;
+                if (form.classList.contains('edit-product-form') && e.submitter?.name === 'save_product') {
+                    e.preventDefault();
+                    handleFormSubmit(form, 'save_product');
+                } else if (form.classList.contains('delete-form') && e.submitter?.name === 'delete_product') {
+                    e.preventDefault();
+                    handleFormSubmit(form, 'delete_product');
+                } else if (form.classList.contains('add-stock-form-inline') && e.submitter?.name === 'update_stock') {
+                    e.preventDefault();
+                    handleFormSubmit(form, 'update_stock');
+                }
+            });
+            
             function enableEdit(button) {
                 console.log('Edit button clicked for element:', button);
                 let form = button.closest('.edit-product-form');
@@ -415,7 +665,7 @@ $products = $stmt->fetchAll(PDO::FETCH_ASSOC);
                 
                 if (!form) {
                     console.error('Edit form not found for button:', button);
-                    alert('Error: Edit form not found. Please check the console for details.');
+                    showMessage('Error: Edit form not found. Please check the console.', 'error');
                     return;
                 }
                 
@@ -426,7 +676,7 @@ $products = $stmt->fetchAll(PDO::FETCH_ASSOC);
                 const row = button.closest('tr');
                 if (!row) {
                     console.error('Parent row not found for button:', button);
-                    alert('Error: Parent row not found. Please check the console.');
+                    showMessage('Error: Parent row not found. Please check the console.', 'error');
                     return;
                 }
                 
@@ -452,12 +702,12 @@ $products = $stmt->fetchAll(PDO::FETCH_ASSOC);
                 
                 if (!inputs.length) {
                     console.error('No inputs found in row:', row);
-                    alert('Error: No inputs found. Please check the console.');
+                    showMessage('Error: No inputs found. Please check the console.', 'error');
                     return;
                 }
                 if (!saveButton || !editButton) {
                     console.error('Save or Edit button not found in form:', form);
-                    alert('Error: Save or Edit button missing. Please check the console.');
+                    showMessage('Error: Save or Edit button missing. Please check the console.', 'error');
                     return;
                 }
                 
