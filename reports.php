@@ -118,7 +118,7 @@ try {
         }
         .report-buttons button {
             padding: 10px 20px;
-            background-color: #2a2f43;
+            background-color: #034c80;
             color: white;
             border: none;
             cursor: pointer;
@@ -126,7 +126,7 @@ try {
             border-radius: 5px;
         }
         .report-buttons button:hover, .report-buttons button.active {
-            background-color: #3e4563;
+            background-color: #0471bd; /* Updated hover color */
         }
         .report-buttons button.active {
             font-weight: bold;
